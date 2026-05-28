@@ -1,12 +1,14 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { SharePlatform } from '@/types/sharing';
 
 interface ShareButtonsProps {
   shareUrl: string;
   amount: string;
   currency: string;
+  txHash?: string;
+  recipientBank?: string;
   onShare?: (platform: SharePlatform) => void;
 }
 
@@ -28,7 +30,6 @@ function trackShare(platform: SharePlatform): void {
       localStorage.getItem(ANALYTICS_KEY) ?? '[]'
     );
     existing.push({ platform, timestamp: Date.now() });
-    // Keep last 100 entries
     localStorage.setItem(ANALYTICS_KEY, JSON.stringify(existing.slice(-100)));
   } catch {
     // ignore storage errors
@@ -49,13 +50,84 @@ export function getShareAnalytics(): Record<SharePlatform, number> {
   }
 }
 
-export function ShareButtons({ shareUrl, amount, currency, onShare }: ShareButtonsProps) {
+/** Generate a receipt image as a data URL using Canvas API */
+function generateReceiptImage(
+  amount: string,
+  currency: string,
+  txHash: string | undefined,
+  recipientBank: string | undefined,
+  privacy: PrivacySettings
+): string {
+  const canvas = document.createElement('canvas');
+  canvas.width = 480;
+  canvas.height = 280;
+  const ctx = canvas.getContext('2d')!;
+
+  // Background
+  ctx.fillStyle = '#0a0a0a';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Gold border
+  ctx.strokeStyle = '#c9a962';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(12, 12, canvas.width - 24, canvas.height - 24);
+
+  // Title
+  ctx.fillStyle = '#c9a962';
+  ctx.font = 'bold 14px monospace';
+  ctx.fillText('STELLAR-SPEND', 32, 48);
+
+  ctx.fillStyle = '#555555';
+  ctx.font = '10px monospace';
+  ctx.fillText('TRANSACTION RECEIPT', 32, 66);
+
+  // Divider
+  ctx.strokeStyle = '#222222';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(32, 78);
+  ctx.lineTo(canvas.width - 32, 78);
+  ctx.stroke();
+
+  let y = 104;
+  const labelX = 32;
+  const valueX = 200;
+
+  const row = (label: string, value: string, highlight = false) => {
+    ctx.fillStyle = '#555555';
+    ctx.font = '10px monospace';
+    ctx.fillText(label, labelX, y);
+    ctx.fillStyle = highlight ? '#c9a962' : '#ffffff';
+    ctx.font = highlight ? 'bold 12px monospace' : '11px monospace';
+    ctx.fillText(value, valueX, y);
+    y += 26;
+  };
+
+  if (privacy.includeAmount) row('AMOUNT', `${amount}${privacy.includeCurrency ? ` ${currency}` : ''}`, true);
+  else if (privacy.includeCurrency) row('CURRENCY', currency);
+
+  if (txHash) row('TX HASH', `${txHash.slice(0, 8)}...${txHash.slice(-6)}`);
+  if (recipientBank) row('RECIPIENT', recipientBank);
+  row('DATE', new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }));
+  row('STATUS', '✓ COMPLETED');
+
+  // Footer
+  ctx.fillStyle = '#333333';
+  ctx.font = '9px monospace';
+  ctx.fillText('stellar-spend.app', 32, canvas.height - 24);
+
+  return canvas.toDataURL('image/png');
+}
+
+export function ShareButtons({ shareUrl, amount, currency, txHash, recipientBank, onShare }: ShareButtonsProps) {
   const [copied, setCopied] = useState(false);
   const [showPrivacy, setShowPrivacy] = useState(false);
+  const [imageGenerated, setImageGenerated] = useState(false);
   const [privacy, setPrivacy] = useState<PrivacySettings>({
     includeAmount: true,
     includeCurrency: true,
   });
+  const imgLinkRef = useRef<HTMLAnchorElement>(null);
 
   const buildShareText = () => {
     const parts: string[] = ['I just completed a transaction'];
@@ -108,6 +180,16 @@ export function ShareButtons({ shareUrl, amount, currency, onShare }: ShareButto
     navigator.clipboard.writeText(shareUrl);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleDownloadReceipt = () => {
+    const dataUrl = generateReceiptImage(amount, currency, txHash, recipientBank, privacy);
+    const a = imgLinkRef.current ?? document.createElement('a');
+    a.href = dataUrl;
+    a.download = `stellar-spend-receipt-${Date.now()}.png`;
+    a.click();
+    setImageGenerated(true);
+    setTimeout(() => setImageGenerated(false), 2000);
   };
 
   return (
@@ -176,6 +258,16 @@ export function ShareButtons({ shareUrl, amount, currency, onShare }: ShareButto
           {copied ? '✓ Copied' : 'Copy'}
         </button>
       </div>
+
+      {/* Receipt image download */}
+      <button
+        onClick={handleDownloadReceipt}
+        className="w-full px-4 py-2 border border-[#333333] text-[#aaaaaa] text-sm hover:border-[#c9a962] hover:text-[#c9a962] transition rounded-lg"
+      >
+        {imageGenerated ? '✓ Receipt Downloaded' : '⬇ Download Receipt Image'}
+      </button>
+      {/* Hidden anchor for download */}
+      <a ref={imgLinkRef} className="hidden" aria-hidden="true" />
     </div>
   );
 }
