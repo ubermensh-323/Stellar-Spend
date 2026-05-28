@@ -5,8 +5,19 @@ export interface ReconciliationRecord {
   stellarTxHash?: string;
   baseTxHash?: string;
   paycrestOrderId?: string;
+  amount?: string;
   timestamp: string;
 }
+
+export interface ReconciliationHistoryEntry {
+  id: string;
+  runAt: string;
+  report: ReconciliationReport;
+  alerts: ReconciliationAlert[];
+}
+
+const reconciliationHistory: ReconciliationHistoryEntry[] = [];
+let dailyJobTimer: ReturnType<typeof setInterval> | null = null;
 
 export interface ReconciliationDiscrepancy {
   transactionId: string;
@@ -153,6 +164,21 @@ export async function reconcileTransaction(
     }
   }
 
+  // Check for amount mismatches between Stellar and Paycrest
+  if (record.amount && stellarData && paycrestData) {
+    const paycrestAmount = paycrestData.amount ?? paycrestData.senderAmount;
+    if (paycrestAmount && String(paycrestAmount) !== record.amount) {
+      discrepancies.push({
+        transactionId: record.transactionId,
+        type: 'amount_mismatch',
+        description: `Amount mismatch: expected ${record.amount}, Paycrest has ${paycrestAmount}`,
+        severity: 'high',
+        stellarData,
+        paycrestData,
+      });
+    }
+  }
+
   return discrepancies;
 }
 
@@ -197,12 +223,83 @@ export interface ManualReconciliationAction {
 export async function performManualReconciliation(
   action: ManualReconciliationAction
 ): Promise<{ success: boolean; message: string }> {
-  // This would integrate with a database to track manual reconciliation actions
-  // For now, return a success response
+  console.info(JSON.stringify({
+    event: 'reconciliation.manual_action',
+    ...action,
+    timestamp: new Date().toISOString(),
+  }));
   return {
     success: true,
     message: `Manual reconciliation action '${action.action}' recorded for transaction ${action.transactionId}`,
   };
+}
+
+export function getReconciliationHistory(): ReconciliationHistoryEntry[] {
+  return [...reconciliationHistory];
+}
+
+export function clearReconciliationHistory(): void {
+  reconciliationHistory.length = 0;
+}
+
+/**
+ * Runs a reconciliation pass and stores the result in history.
+ */
+export async function runReconciliationJob(
+  records: ReconciliationRecord[]
+): Promise<ReconciliationHistoryEntry> {
+  const report = await generateReconciliationReport(records);
+  const alerts = generateAlerts(report);
+  const entry: ReconciliationHistoryEntry = {
+    id: `recon_${Date.now()}`,
+    runAt: new Date().toISOString(),
+    report,
+    alerts,
+  };
+  reconciliationHistory.push(entry);
+  // Cap history to last 30 runs
+  if (reconciliationHistory.length > 30) reconciliationHistory.shift();
+
+  console.info(JSON.stringify({
+    event: 'reconciliation.job_completed',
+    runId: entry.id,
+    totalTransactions: report.totalTransactions,
+    discrepancies: report.discrepancies.length,
+    alerts: alerts.length,
+    timestamp: entry.runAt,
+  }));
+
+  return entry;
+}
+
+/**
+ * Schedules a daily reconciliation job.
+ * @param fetchRecords - async function that returns records to reconcile
+ * @param intervalMs  - defaults to 24 hours
+ */
+export function scheduleDailyReconciliationJob(
+  fetchRecords: () => Promise<ReconciliationRecord[]>,
+  intervalMs = 24 * 60 * 60 * 1000
+): void {
+  if (dailyJobTimer) return;
+
+  const run = async () => {
+    try {
+      const records = await fetchRecords();
+      await runReconciliationJob(records);
+    } catch (err) {
+      console.error('Reconciliation job failed:', err);
+    }
+  };
+
+  dailyJobTimer = setInterval(run, intervalMs);
+}
+
+export function stopDailyReconciliationJob(): void {
+  if (dailyJobTimer) {
+    clearInterval(dailyJobTimer);
+    dailyJobTimer = null;
+  }
 }
 
 export interface ReconciliationAlert {
