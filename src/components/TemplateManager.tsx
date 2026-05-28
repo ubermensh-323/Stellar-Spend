@@ -58,7 +58,7 @@ export function TemplateManager({ onSelectTemplate }: TemplateManagerProps) {
       TemplateStorage.updateTemplate(editingId, formData);
       setEditingId(null);
     } else {
-      TemplateStorage.createTemplate(formData);
+      TemplateStorage.createTemplate({ ...formData, usageCount: 0 });
     }
     refresh();
     setFormData(EMPTY_FORM);

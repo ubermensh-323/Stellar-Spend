@@ -20,11 +20,11 @@ export class TemplateStorage {
   static createTemplate(template: Omit<TransactionTemplate, 'id' | 'createdAt'>): TransactionTemplate {
     const id = crypto.randomUUID();
     const saved: TransactionTemplate = {
-      category: 'General',
-      usageCount: 0,
       ...template,
       id,
       createdAt: Date.now(),
+      category: template.category ?? 'General',
+      usageCount: template.usageCount ?? 0,
     };
 
     const templates = this.getAllTemplates();
