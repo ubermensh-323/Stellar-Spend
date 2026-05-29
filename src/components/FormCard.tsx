@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, useCallback, useEffect, useRef, useState } from "react";
+import { ChangeEvent, KeyboardEvent, useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 import {
   validateAmount,
@@ -14,6 +14,7 @@ import { FormCardSkeleton } from "@/components/skeletons";
 import { BankAccountInput, type BankMode } from "@/components/BankAccountInput";
 import { QuoteComparison, type ProviderQuote } from "@/components/QuoteComparison";
 import { Tooltip } from "@/components/Tooltip";
+import { InsuranceOption, type InsuranceQuote } from "@/components/InsuranceOption";
 import { useFxRate } from "@/hooks/useFxRate";
 import type { QuoteResult as QuoteFetcherResult } from "@/lib/offramp/utils/quote-fetcher";
 
@@ -52,6 +53,10 @@ export interface OfframpPayload {
   routingNumber?: string;
   iban?: string;
   quote: QuoteResult | null;
+  insurance: {
+    enabled: boolean;
+    quote: InsuranceQuote | null;
+  };
 }
 
 export interface FormCardProps {
@@ -474,8 +479,15 @@ function getCtaLabel(state: CtaState): string {
 }
 
 export function FormCard({
+  isConnecting,
   isConnected,
   onConnect,
+  onSubmit,
+  resetKey = 0,
+  onQuoteChange,
+  onAmountChange,
+  onCurrencyChange,
+  isInitialLoading,
 }: FormCardProps) {
   const [amount, setAmount] = useState("");
   const [feeMethod, setFeeMethod] = useState<FeeMethod>("USDC");
@@ -490,6 +502,8 @@ export function FormCard({
   const [currencies, setCurrencies] = useState<Currency[]>([]);
   const [institutions, setInstitutions] = useState<Institution[]>([]);
   const [quote, setQuote] = useState<QuoteResult | null>(null);
+  const [insuranceQuote, setInsuranceQuote] = useState<InsuranceQuote | null>(null);
+  const [insuranceEnabled, setInsuranceEnabled] = useState(false);
   const [gasFees, setGasFees] = useState<GasFeeOptions | null>(null);
 
   const { rate: liveRate, flash: rateFlash } = useFxRate();
@@ -525,6 +539,8 @@ export function FormCard({
     setInstitution("");
     setAccountName("");
     setQuote(null);
+    setInsuranceQuote(null);
+    setInsuranceEnabled(false);
     onQuoteChange?.(null);
     setAmountError("");
     setQuoteError("");
@@ -728,6 +744,10 @@ export function FormCard({
         routingNumber: routingNumber || undefined,
         iban: iban || undefined,
         quote,
+        insurance: {
+          enabled: insuranceEnabled,
+          quote: insuranceQuote,
+        },
       });
     } finally {
       setIsSubmitting(false);
@@ -761,6 +781,19 @@ export function FormCard({
         !accountNumber ||
         !accountName ||
         !!verifyError));
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && !ctaDisabled) {
+      event.preventDefault();
+      void handleSubmit();
+    }
+  };
+
+  const handleSubmitForm = () => {
+    void handleSubmit();
+  };
+
+  const getCtaDisabled = (_state: CtaState) => ctaDisabled;
 
   return (
     <section className="flex flex-col gap-6" onKeyDown={handleKeyDown}>
@@ -884,6 +917,16 @@ export function FormCard({
       {quote && (
         <PayoutBox quote={quote} currency={currency} liveRate={liveRate} flash={rateFlash} />
       )}
+
+      <InsuranceOption
+        amount={parseFloat(amount) || 0}
+        currency="USDC"
+        disabled={!isConnected || isSubmitting}
+        onToggle={(enabled, selectedQuote) => {
+          setInsuranceEnabled(enabled);
+          setInsuranceQuote(selectedQuote);
+        }}
+      />
 
         <button
           onClick={ctaState === "disconnected" ? onConnect : handleSubmitForm}

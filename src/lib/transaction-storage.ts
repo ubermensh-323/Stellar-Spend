@@ -36,6 +36,18 @@ export interface Transaction {
   };
   /** Whether this transaction is marked as favorite */
   isFavorite?: boolean;
+  /** Transaction insurance policy attached to this transaction */
+  insurance?: {
+    id?: string;
+    premium: number;
+    coverage: number;
+    provider: string;
+    riskScore: number;
+    status: 'pending' | 'active' | 'claimed' | 'claim_approved' | 'claim_rejected' | 'paid';
+    claimId?: string;
+    claimReason?: string;
+    purchasedAt: number;
+  };
 }
 
 const STORAGE_KEY = 'stellar_spend_transactions';

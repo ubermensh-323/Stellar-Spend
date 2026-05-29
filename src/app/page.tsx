@@ -65,6 +65,17 @@ export default function Home() {
       // 2. Generate txId and save initial transaction record
       const txId = TransactionStorage.generateId();
       txIdRef.current = txId;
+      const selectedInsurance = payload.insurance.enabled && payload.insurance.quote
+        ? {
+            id: `ins_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+            premium: payload.insurance.quote.premium,
+            coverage: payload.insurance.quote.coverage,
+            provider: payload.insurance.quote.provider,
+            riskScore: payload.insurance.quote.riskScore,
+            status: "active" as const,
+            purchasedAt: Date.now(),
+          }
+        : undefined;
 
       TransactionStorage.save({
         id: txId,
@@ -79,6 +90,7 @@ export default function Home() {
           currency: payload.currency,
         },
         status: "pending",
+        insurance: selectedInsurance,
       });
 
       setModalError(undefined);

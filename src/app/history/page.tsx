@@ -12,6 +12,7 @@ import { getCurrencyFlag } from "@/lib/currency-flags";
 import { TransactionTableSkeleton } from "@/components/skeletons";
 import ExportControls from "@/components/ExportControls";
 import { StatusBadge } from "@/components/StatusBadge";
+import { InsuranceClaimForm } from "@/components/InsuranceClaimForm";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -43,6 +44,29 @@ function getCurrencySymbol(currency: string): string {
     ZAR: "R",
   };
   return symbols[currency.toUpperCase()] || currency.toUpperCase();
+}
+
+function formatUsdc(amount: number): string {
+  return amount.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 6,
+  });
+}
+
+function getInsuranceStatusLabel(status: NonNullable<Transaction["insurance"]>["status"]): string {
+  const labels: Record<NonNullable<Transaction["insurance"]>["status"], string> = {
+    pending: "Pending",
+    active: "Active",
+    claimed: "Claim filed",
+    claim_approved: "Approved",
+    claim_rejected: "Rejected",
+    paid: "Paid",
+  };
+  return labels[status];
+}
+
+function canFileClaim(tx: Transaction): boolean {
+  return !!tx.insurance && tx.insurance.status === "active";
 }
 
 // ---------------------------------------------------------------------------
@@ -118,6 +142,7 @@ export default function HistoryPage() {
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [noteInput, setNoteInput] = useState("");
   const [noteError, setNoteError] = useState<string | null>(null);
+  const [claimingTransaction, setClaimingTransaction] = useState<Transaction | null>(null);
 
   // Hydrate filters from localStorage on mount (client-only).
   useEffect(() => {
@@ -161,13 +186,21 @@ export default function HistoryPage() {
         return res.json() as Promise<Transaction[]>;
       })
       .then((data) => {
-        setTransactions(data);
+        const localTransactions = TransactionStorage.getByUser(address);
+        const merged = new Map<string, Transaction>();
+        [...data, ...localTransactions].forEach((tx) => merged.set(tx.id, tx));
+        setTransactions(Array.from(merged.values()));
       })
       .catch((err: unknown) => {
+        const localTransactions = TransactionStorage.getByUser(address);
+        setTransactions(localTransactions);
         setError(
-          err instanceof Error ? err.message : "Failed to load transactions",
+          localTransactions.length > 0
+            ? null
+            : err instanceof Error
+              ? err.message
+              : "Failed to load transactions",
         );
-        setTransactions([]);
       })
       .finally(() => {
         setIsLoading(false);
@@ -287,6 +320,35 @@ export default function HistoryPage() {
     return result;
   }, [transactions, filters]);
 
+  const insuredTransactions = useMemo(
+    () => transactions.filter((tx) => tx.insurance),
+    [transactions],
+  );
+
+  const activeCoverage = insuredTransactions.reduce(
+    (sum, tx) =>
+      tx.insurance && ["pending", "active", "claimed", "claim_approved"].includes(tx.insurance.status)
+        ? sum + tx.insurance.coverage
+        : sum,
+    0,
+  );
+
+  const handleClaimSuccess = (claimId: string) => {
+    if (!claimingTransaction?.insurance) return;
+    const updatedInsurance = {
+      ...claimingTransaction.insurance,
+      status: "claimed" as const,
+      claimId,
+    };
+    setTransactions((prev) =>
+      prev.map((tx) =>
+        tx.id === claimingTransaction.id ? { ...tx, insurance: updatedInsurance } : tx,
+      ),
+    );
+    TransactionStorage.update(claimingTransaction.id, { insurance: updatedInsurance });
+    setClaimingTransaction(null);
+  };
+
   const filterCount = activeFilterCount(filters);
   const hasActiveFilters = filterCount > 0;
 
@@ -366,6 +428,27 @@ export default function HistoryPage() {
               transactions={transactions}
               walletAddress={wallet?.publicKey}
             />
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4">
+              <div className="border border-[#333333] bg-[#111111] p-4">
+                <p className="text-[10px] tracking-widest uppercase text-[#777777]">Insured Transactions</p>
+                <p className="mt-2 text-2xl font-semibold text-white tabular-nums">
+                  {insuredTransactions.length}
+                </p>
+              </div>
+              <div className="border border-[#333333] bg-[#111111] p-4">
+                <p className="text-[10px] tracking-widest uppercase text-[#777777]">Active Coverage</p>
+                <p className="mt-2 text-2xl font-semibold text-[#4ade80] tabular-nums">
+                  {formatUsdc(activeCoverage)} USDC
+                </p>
+              </div>
+              <div className="border border-[#333333] bg-[#111111] p-4">
+                <p className="text-[10px] tracking-widest uppercase text-[#777777]">Claims Filed</p>
+                <p className="mt-2 text-2xl font-semibold text-[#c9a962] tabular-nums">
+                  {insuredTransactions.filter((tx) => tx.insurance?.claimId).length}
+                </p>
+              </div>
+            </div>
 
             {/* ── Filters ── */}
             <div className="border border-[#333333] bg-[#111111] p-4 mt-4">
@@ -617,6 +700,9 @@ export default function HistoryPage() {
                       <th className="px-5 py-2.5 text-left text-[10px] tracking-[0.18em] font-semibold text-[#0a0a0a] uppercase whitespace-nowrap">
                         NOTE
                       </th>
+                      <th className="px-5 py-2.5 text-left text-[10px] tracking-[0.18em] font-semibold text-[#0a0a0a] uppercase whitespace-nowrap">
+                        INSURANCE
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -715,6 +801,38 @@ export default function HistoryPage() {
                             </button>
                           )}
                         </td>
+                        <td className="px-5 py-3 text-xs whitespace-nowrap">
+                          {tx.insurance ? (
+                            <div className="flex flex-col gap-1.5">
+                              <div className="flex items-center gap-2">
+                                <span className="border border-[#c9a962]/40 bg-[#c9a962]/10 px-2 py-0.5 text-[10px] uppercase tracking-widest text-[#c9a962]">
+                                  {getInsuranceStatusLabel(tx.insurance.status)}
+                                </span>
+                                <span className="text-[#777777]">
+                                  {formatUsdc(tx.insurance.premium)} USDC premium
+                                </span>
+                              </div>
+                              <span className="text-[#4ade80]">
+                                {formatUsdc(tx.insurance.coverage)} USDC coverage
+                              </span>
+                              {tx.insurance.claimId && (
+                                <span className="font-mono text-[10px] text-[#777777]">
+                                  {tx.insurance.claimId}
+                                </span>
+                              )}
+                              {canFileClaim(tx) && (
+                                <button
+                                  onClick={() => setClaimingTransaction(tx)}
+                                  className="w-fit text-[10px] tracking-widest uppercase text-[#c9a962] hover:text-white transition-colors duration-150"
+                                >
+                                  File claim
+                                </button>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-[#555555]">Not insured</span>
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -724,6 +842,16 @@ export default function HistoryPage() {
           </>
         )}
       </section>
+
+      {claimingTransaction?.insurance?.id && (
+        <InsuranceClaimForm
+          transactionId={claimingTransaction.id}
+          insuranceId={claimingTransaction.insurance.id}
+          coverage={claimingTransaction.insurance.coverage}
+          onSuccess={handleClaimSuccess}
+          onCancel={() => setClaimingTransaction(null)}
+        />
+      )}
     </main>
   );
 }
